@@ -62,6 +62,11 @@ def save_doctor(data, db_path='db/health_professionals.db'):
     """Thread-safe database save with proper locking"""
     conn = sqlite3.connect(db_path, timeout=30.0)
     c = conn.cursor()
+    
+    # Check if doctor already exists
+    c.execute('SELECT rpps FROM professionals WHERE rpps = ?', (data['rpps'],))
+    is_duplicate = c.fetchone() is not None
+    
     c.execute('''
         INSERT OR REPLACE INTO professionals
         (rpps, name, profession, organization, address, phone, email,
@@ -84,6 +89,8 @@ def save_doctor(data, db_path='db/health_professionals.db'):
     ))
     conn.commit()
     conn.close()
+    
+    return is_duplicate
 
 
 def scrape_one_doctor(session, card, p_auth, prefix):
@@ -299,20 +306,67 @@ def scrape_prefix(prefix, progress_queue=None):
             all_cards.extend(page_cards)
             time.sleep(0.2)
         
-        print(f"[{process_id}] Prefix '{prefix}': Collected {len(all_cards)} cards")
+        pages_scraped = (len(all_cards) + 9) // 10  # Round up to get page count
+        print(f"[{process_id}] Prefix '{prefix}': ✓ Collected {len(all_cards)} cards from {pages_scraped} pages")
+        print(f"[{process_id}] Prefix '{prefix}': Starting detail scraping...")
         
         # NOW scrape details
         count = 0
-        for card in all_cards:
+        duplicates = 0
+        details_complete = 0
+        
+        for idx, card in enumerate(all_cards, 1):
             doctor_data = scrape_one_doctor(session, card, p_auth, prefix)
             if doctor_data:
-                save_doctor(doctor_data)
+                is_duplicate = save_doctor(doctor_data)
                 count += 1
+                
+                # Check if details were successfully scraped
+                has_details = (
+                    len(doctor_data.get('situation_data', '{}')) > 10 and
+                    len(doctor_data.get('dossier_data', '{}')) > 10 and
+                    len(doctor_data.get('diplomes_data', '{}')) > 10 and
+                    len(doctor_data.get('personne_data', '{}')) > 10
+                )
+                
+                if has_details:
+                    details_complete += 1
+                
+                if is_duplicate:
+                    duplicates += 1
+                
+                # Enhanced logging
+                status_parts = []
+                if is_duplicate:
+                    status_parts.append("DUPLICATE")
+                if has_details:
+                    status_parts.append("DETAILS ✓")
+                else:
+                    status_parts.append("BASIC ONLY")
+                
+                status = f"[{', '.join(status_parts)}]" if status_parts else ""
+                
                 if progress_queue:
-                    progress_queue.put({'prefix': prefix, 'doctor': doctor_data['name']})
+                    progress_queue.put({
+                        'prefix': prefix, 
+                        'doctor': doctor_data['name'],
+                        'status': status,
+                        'idx': idx,
+                        'total': len(all_cards)
+                    })
+                
                 time.sleep(1.0)  # Critical delay
         
-        return {'prefix': prefix, 'count': count, 'total_cards': len(all_cards)}
+        # Summary log
+        print(f"[{process_id}] Prefix '{prefix}': ✓ FINISHED - {count} doctors ({details_complete} with full details, {duplicates} duplicates)")
+        
+        return {
+            'prefix': prefix, 
+            'count': count, 
+            'total_cards': len(all_cards),
+            'details_complete': details_complete,
+            'duplicates': duplicates
+        }
         
     except Exception as e:
         print(f"[{process_id}] Prefix '{prefix}': ERROR - {e}")
@@ -356,7 +410,12 @@ def main():
             while not result.ready():
                 try:
                     msg = progress_queue.get(timeout=1)
-                    print(f"   [{msg['prefix']}] Saved: {msg['doctor']}")
+                    doctor_name = msg['doctor']
+                    status = msg.get('status', '')
+                    idx = msg.get('idx', '')
+                    total = msg.get('total', '')
+                    progress = f"({idx}/{total})" if idx and total else ""
+                    print(f"   [{msg['prefix']}] {progress} {doctor_name} {status}")
                 except:
                     pass
             
@@ -371,16 +430,28 @@ def main():
     print(f"{'='*80}")
     print(f"\nResults by prefix:")
     total_doctors = 0
+    total_details = 0
+    total_duplicates = 0
     for res in results:
         prefix = res['prefix']
         count = res['count']
         total_cards = res.get('total_cards', 0)
+        details = res.get('details_complete', 0)
+        duplicates = res.get('duplicates', 0)
         error = res.get('error', '')
         total_doctors += count
-        status = f"✓ {count}/{total_cards} doctors" if not error else f"✗ Error: {error}"
+        total_details += details
+        total_duplicates += duplicates
+        
+        if error:
+            status = f"✗ Error: {error}"
+        else:
+            status = f"✓ {count}/{total_cards} doctors ({details} full details, {duplicates} dups)"
         print(f"  {prefix:3s}: {status}")
     
     print(f"\n  Total: {total_doctors} doctors scraped")
+    print(f"  Full details: {total_details}/{total_doctors} ({int(100*total_details/total_doctors) if total_doctors > 0 else 0}%)")
+    print(f"  Duplicates: {total_duplicates}")
     print(f"  Time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
     print(f"  Speed: {total_doctors/elapsed:.2f} doctors/second")
     print(f"\nDatabase: db/health_professionals.db")

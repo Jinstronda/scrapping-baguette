@@ -1,6 +1,10 @@
 # Database files
-db/*.db
-db/*.db-journal
+db/
+*.db
+*.db-journal
+
+# Legacy code (archived experiments)
+legacy/
 
 # Python cache
 __pycache__/
@@ -15,12 +19,18 @@ env/
 ENV/
 turing0.1/
 
-# IDE
+# IDE and AI tools
 .vscode/
 .idea/
+.cursor/
+.claude/
 *.swp
 *.swo
 *~
+
+# AI prompts and documentation
+CLAUDE.md
+plan.mdc
 
 # OS
 .DS_Store
@@ -28,7 +38,6 @@ Thumbs.db
 desktop.ini
 
 # Test/debug files
-legacy/*/db/*.db
 debug_*.html
 test_*.html
 

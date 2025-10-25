@@ -1,0 +1,34 @@
+# Database files
+db/*.db
+db/*.db-journal
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+turing0.1/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test/debug files
+legacy/*/db/*.db
+*.log
+debug_*.html
+test_*.html

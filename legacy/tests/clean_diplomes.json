@@ -1,0 +1,16 @@
+{
+  "diplomes": [
+    {
+      "Code": "DIP319",
+      "Type": "Autre type de diplôme",
+      "Numéro": "",
+      "Libellé": "Titre d'Assistant Dentaire",
+      "Lieud'obtention": "",
+      "Paysd'obtention": "",
+      "Dated'obtention": "",
+      "Validation par le guichet principal": ""
+    }
+  ],
+  "autres_diplomes": [],
+  "autorisations": []
+}

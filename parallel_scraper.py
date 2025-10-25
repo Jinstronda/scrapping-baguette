@@ -29,6 +29,9 @@ from pathlib import Path
 # Import configuration
 import config
 
+# Import smart expansion
+from smart_expansion import smart_scrape
+
 # Import from our working scraper
 from legacy.scraper.content_extractor import (
     extract_situation_content,
@@ -433,6 +436,7 @@ def main():
     log(f"   Delay between doctors: {config.DELAY_BETWEEN_DOCTORS}s")
     log(f"   Log file: {log_path if config.ENABLE_FILE_LOGGING else 'Console only'}")
     
+    log(f"   Smart expansion: {'ENABLED' if config.SMART_EXPANSION else 'DISABLED'}")
     log(f"\n2. Starting parallel scraping...")
     start_time = time.time()
     
@@ -440,15 +444,12 @@ def main():
     with Manager() as manager:
         progress_queue = manager.Queue()
         
-        # Create pool and run
-        with Pool(processes=num_workers) as pool:
-            # Start async results
-            scrape_with_queue = partial(scrape_prefix, progress_queue=progress_queue)
-            result = pool.map_async(scrape_with_queue, prefixes)
-            
-            # Monitor progress
-            completed_prefixes = 0
-            while not result.ready():
+        # Monitor progress in background
+        import threading
+        stop_monitoring = threading.Event()
+        
+        def monitor_progress():
+            while not stop_monitoring.is_set():
                 try:
                     msg = progress_queue.get(timeout=1)
                     doctor_name = msg['doctor']
@@ -459,9 +460,22 @@ def main():
                     log(f"   [{msg['prefix']}] {progress} {doctor_name} {status}")
                 except:
                     pass
-            
-            # Get final results
-            results = result.get()
+        
+        monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+        monitor_thread.start()
+        
+        # Choose scraping mode
+        if config.SMART_EXPANSION:
+            log("   Mode: SMART EXPANSION (will auto-expand prefixes that hit limits)")
+            results = smart_scrape(scrape_prefix, prefixes, num_workers, progress_queue)
+        else:
+            log("   Mode: FIXED PREFIXES (no expansion)")
+            with Pool(processes=num_workers) as pool:
+                scrape_with_queue = partial(scrape_prefix, progress_queue=progress_queue)
+                results = pool.map(scrape_with_queue, prefixes)
+        
+        stop_monitoring.set()
+        monitor_thread.join(timeout=2)
     
     elapsed = time.time() - start_time
     

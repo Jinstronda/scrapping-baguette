@@ -1,6 +1,15 @@
 """
 Configuration file for parallel scraper
 Adjust these settings to optimize scraping performance
+
+QUICK START:
+1. Test with 4 workers, no expansion: Leave defaults
+2. Scale up: Set NUM_WORKERS = 30
+3. Full coverage: Set SMART_EXPANSION = True, PREFIXES = list('abcdefghijklmnopqrstuvwxyz')
+4. Run: python parallel_scraper.py
+5. Check logs/ folder for results
+
+See TESTING_GUIDE.md for detailed testing methodology
 """
 
 # ============================================================================
@@ -22,6 +31,11 @@ NUM_WORKERS = 30
 #   - All letters: list('abcdefghijklmnopqrstuvwxyz')
 #   - Custom list: ['a', 'b', 'ma', 'me', 'pa']
 PREFIXES = list('abcdefghij')  # First 10 letters for testing
+
+# Enable smart prefix expansion
+# When True: Automatically expands prefixes that hit pagination limit
+# Example: If 'a' gets 100 results (10 pages), expands to 'aa', 'ab', ..., 'az'
+SMART_EXPANSION = False  # Set to True for 100% coverage
 
 # Maximum number of doctors to scrape per prefix (0 = unlimited)
 # Useful for quick tests

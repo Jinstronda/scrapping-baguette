@@ -9,6 +9,7 @@ SOTA Approach:
 - Independent sessions prevent anti-scraping triggers
 - Shared SQLite database with proper locking
 - Progress tracking with tqdm
+- Comprehensive logging and metrics tracking
 """
 
 import multiprocessing as mp
@@ -20,6 +21,13 @@ import re
 import sqlite3
 from functools import partial
 import sys
+import os
+import json
+from datetime import datetime
+from pathlib import Path
+
+# Import configuration
+import config
 
 # Import from our working scraper
 from legacy.scraper.content_extractor import (
@@ -32,7 +40,9 @@ from legacy.scraper.content_extractor import (
 
 def create_database():
     """Create SQLite database with proper threading support"""
-    conn = sqlite3.connect('db/health_professionals.db', check_same_thread=False)
+    # Ensure db directory exists
+    Path('db').mkdir(exist_ok=True)
+    conn = sqlite3.connect(config.DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS professionals (
@@ -58,9 +68,11 @@ def create_database():
     conn.close()
 
 
-def save_doctor(data, db_path='db/health_professionals.db'):
+def save_doctor(data, db_path=None):
     """Thread-safe database save with proper locking"""
-    conn = sqlite3.connect(db_path, timeout=30.0)
+    if db_path is None:
+        db_path = config.DATABASE_PATH
+    conn = sqlite3.connect(db_path, timeout=config.DB_TIMEOUT)
     c = conn.cursor()
     
     # Check if doctor already exists
@@ -156,8 +168,8 @@ def scrape_one_doctor(session, card, p_auth, prefix):
             'p_auth': p_auth
         }
         detail = session.post('https://annuaire.sante.fr/web/site-pro/recherche/resultats', 
-                            params=detail_params, data='', timeout=30)
-        time.sleep(0.5)
+                            params=detail_params, data='', timeout=config.REQUEST_TIMEOUT)
+        time.sleep(config.DELAY_BETWEEN_TABS)
         
         # Step 2: Navigate to situation tab
         situation_params = {
@@ -177,9 +189,9 @@ def scrape_one_doctor(session, card, p_auth, prefix):
             'p_auth': p_auth
         }
         situation = session.post('https://annuaire.sante.fr/web/site-pro/recherche/resultats',
-                                params=situation_params, data='', timeout=30)
+                                params=situation_params, data='', timeout=config.REQUEST_TIMEOUT)
         data['situation_data'] = extract_situation_content(situation.text)
-        time.sleep(0.5)
+        time.sleep(config.DELAY_BETWEEN_TABS)
         
         # Step 3: Fetch other tabs
         base_params = {
@@ -201,23 +213,23 @@ def scrape_one_doctor(session, card, p_auth, prefix):
         dossier_params = base_params.copy()
         dossier_params['_resultatsportlet_javax.portlet.action'] = 'detailsPPDossierPro'
         dossier = session.post('https://annuaire.sante.fr/web/site-pro/information-detaillees',
-                              params=dossier_params, data='', timeout=30)
+                              params=dossier_params, data='', timeout=config.REQUEST_TIMEOUT)
         data['dossier_data'] = extract_dossier_content(dossier.text)
-        time.sleep(0.5)
+        time.sleep(config.DELAY_BETWEEN_TABS)
         
         # Diplomes
         diplomes_params = base_params.copy()
         diplomes_params['_resultatsportlet_javax.portlet.action'] = 'detailsPPDiplomes'
         diplomes = session.post('https://annuaire.sante.fr/web/site-pro/information-detaillees',
-                               params=diplomes_params, data='', timeout=30)
+                               params=diplomes_params, data='', timeout=config.REQUEST_TIMEOUT)
         data['diplomes_data'] = extract_diplomes_content(diplomes.text)
-        time.sleep(0.5)
+        time.sleep(config.DELAY_BETWEEN_TABS)
         
         # Personne
         personne_params = base_params.copy()
         personne_params['_resultatsportlet_javax.portlet.action'] = 'detailsPPPersonne'
         personne = session.post('https://annuaire.sante.fr/web/site-pro/information-detaillees',
-                               params=personne_params, data='', timeout=30)
+                               params=personne_params, data='', timeout=config.REQUEST_TIMEOUT)
         data['personne_data'] = extract_personne_content(personne.text)
         
     except Exception as e:
@@ -304,7 +316,7 @@ def scrape_prefix(prefix, progress_queue=None):
                 break
             
             all_cards.extend(page_cards)
-            time.sleep(0.2)
+            time.sleep(config.DELAY_BETWEEN_PAGES)
         
         pages_scraped = (len(all_cards) + 9) // 10  # Round up to get page count
         print(f"[{process_id}] Prefix '{prefix}': ✓ Collected {len(all_cards)} cards from {pages_scraped} pages")
@@ -355,7 +367,12 @@ def scrape_prefix(prefix, progress_queue=None):
                         'total': len(all_cards)
                     })
                 
-                time.sleep(1.0)  # Critical delay
+                time.sleep(config.DELAY_BETWEEN_DOCTORS)  # Critical delay
+                
+            # Check if we hit the limit
+            if config.MAX_DOCTORS_PER_PREFIX > 0 and count >= config.MAX_DOCTORS_PER_PREFIX:
+                print(f"[{process_id}] Prefix '{prefix}': Reached max doctors limit ({config.MAX_DOCTORS_PER_PREFIX})")
+                break
         
         # Summary log
         print(f"[{process_id}] Prefix '{prefix}': ✓ FINISHED - {count} doctors ({details_complete} with full details, {duplicates} duplicates)")
@@ -375,24 +392,48 @@ def scrape_prefix(prefix, progress_queue=None):
 
 def main():
     """Main parallel scraper with progress tracking"""
-    print("="*80)
-    print("PARALLEL SCRAPER - Multiple Processes, Multiple Prefixes")
-    print("="*80)
+    # Setup logging
+    if config.ENABLE_FILE_LOGGING:
+        Path(config.LOGS_DIR).mkdir(exist_ok=True)
+        
+        if config.AUTO_LOG_FILENAME:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_filename = f"scrape_{timestamp}_{config.NUM_WORKERS}workers.log"
+        else:
+            log_filename = f"scrape_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        
+        log_path = Path(config.LOGS_DIR) / log_filename
+        log_file = open(log_path, 'w', encoding='utf-8')
+    else:
+        log_file = None
+    
+    def log(message):
+        """Log to console and file"""
+        print(message)
+        if log_file:
+            log_file.write(message + '\n')
+            log_file.flush()
+    
+    log("="*80)
+    log("PARALLEL SCRAPER - Multiple Processes, Multiple Prefixes")
+    log("="*80)
     
     # Create database
     create_database()
     
-    # Define search prefixes (start with single letters)
-    # You can expand this to aa, ab, ac, etc. for more coverage
-    prefixes = list('abcdefghij')  # First 10 letters for testing
-    num_workers = min(4, len(prefixes))  # Max 4 concurrent processes
+    # Use config values
+    prefixes = config.PREFIXES
+    num_workers = min(config.NUM_WORKERS, len(prefixes))
     
-    print(f"\n1. Configuration:")
-    print(f"   Prefixes to scrape: {', '.join(prefixes)}")
-    print(f"   Concurrent workers: {num_workers}")
-    print(f"   Database: db/health_professionals.db")
+    log(f"\n1. Configuration:")
+    log(f"   Prefixes to scrape: {', '.join(prefixes)}")
+    log(f"   Concurrent workers: {num_workers}")
+    log(f"   Database: {config.DATABASE_PATH}")
+    log(f"   Max doctors per prefix: {config.MAX_DOCTORS_PER_PREFIX if config.MAX_DOCTORS_PER_PREFIX > 0 else 'Unlimited'}")
+    log(f"   Delay between doctors: {config.DELAY_BETWEEN_DOCTORS}s")
+    log(f"   Log file: {log_path if config.ENABLE_FILE_LOGGING else 'Console only'}")
     
-    print(f"\n2. Starting parallel scraping...")
+    log(f"\n2. Starting parallel scraping...")
     start_time = time.time()
     
     # Create manager for progress tracking
@@ -415,7 +456,7 @@ def main():
                     idx = msg.get('idx', '')
                     total = msg.get('total', '')
                     progress = f"({idx}/{total})" if idx and total else ""
-                    print(f"   [{msg['prefix']}] {progress} {doctor_name} {status}")
+                    log(f"   [{msg['prefix']}] {progress} {doctor_name} {status}")
                 except:
                     pass
             
@@ -424,14 +465,16 @@ def main():
     
     elapsed = time.time() - start_time
     
-    # Summary
-    print(f"\n{'='*80}")
-    print("SCRAPING COMPLETE")
-    print(f"{'='*80}")
-    print(f"\nResults by prefix:")
+    # Calculate metrics
+    log(f"\n{'='*80}")
+    log("SCRAPING COMPLETE")
+    log(f"{'='*80}")
+    log(f"\nResults by prefix:")
     total_doctors = 0
     total_details = 0
     total_duplicates = 0
+    failed_prefixes = []
+    
     for res in results:
         prefix = res['prefix']
         count = res['count']
@@ -445,17 +488,68 @@ def main():
         
         if error:
             status = f"✗ Error: {error}"
+            failed_prefixes.append({'prefix': prefix, 'error': error})
         else:
             status = f"✓ {count}/{total_cards} doctors ({details} full details, {duplicates} dups)"
-        print(f"  {prefix:3s}: {status}")
+        log(f"  {prefix:3s}: {status}")
     
-    print(f"\n  Total: {total_doctors} doctors scraped")
-    print(f"  Full details: {total_details}/{total_doctors} ({int(100*total_details/total_doctors) if total_doctors > 0 else 0}%)")
-    print(f"  Duplicates: {total_duplicates}")
-    print(f"  Time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
-    print(f"  Speed: {total_doctors/elapsed:.2f} doctors/second")
-    print(f"\nDatabase: db/health_professionals.db")
-    print(f"{'='*80}")
+    success_rate = (len(prefixes) - len(failed_prefixes)) / len(prefixes) * 100 if prefixes else 0
+    detail_completion_rate = (total_details / total_doctors * 100) if total_doctors > 0 else 0
+    
+    log(f"\n  Total: {total_doctors} doctors scraped")
+    log(f"  Full details: {total_details}/{total_doctors} ({detail_completion_rate:.1f}%)")
+    log(f"  Duplicates: {total_duplicates}")
+    log(f"  Failed prefixes: {len(failed_prefixes)}/{len(prefixes)}")
+    log(f"  Success rate: {success_rate:.1f}%")
+    log(f"  Time: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
+    log(f"  Speed: {total_doctors/elapsed:.2f} doctors/second")
+    log(f"\nDatabase: {config.DATABASE_PATH}")
+    log(f"{'='*80}")
+    
+    # Save metrics to JSON
+    if config.TRACK_METRICS:
+        metrics = {
+            'timestamp': datetime.now().isoformat(),
+            'config': {
+                'num_workers': num_workers,
+                'prefixes': prefixes,
+                'max_doctors_per_prefix': config.MAX_DOCTORS_PER_PREFIX,
+                'delay_between_doctors': config.DELAY_BETWEEN_DOCTORS,
+                'delay_between_tabs': config.DELAY_BETWEEN_TABS,
+                'delay_between_pages': config.DELAY_BETWEEN_PAGES
+            },
+            'results': {
+                'total_doctors': total_doctors,
+                'total_details_complete': total_details,
+                'detail_completion_rate': detail_completion_rate,
+                'total_duplicates': total_duplicates,
+                'failed_prefixes': len(failed_prefixes),
+                'success_rate': success_rate,
+                'elapsed_seconds': elapsed,
+                'doctors_per_second': total_doctors / elapsed if elapsed > 0 else 0
+            },
+            'by_prefix': [
+                {
+                    'prefix': r['prefix'],
+                    'count': r['count'],
+                    'total_cards': r.get('total_cards', 0),
+                    'details_complete': r.get('details_complete', 0),
+                    'duplicates': r.get('duplicates', 0),
+                    'error': r.get('error', None)
+                }
+                for r in results
+            ],
+            'failed_prefixes': failed_prefixes if config.SAVE_FAILED_DOCTORS else []
+        }
+        
+        metrics_filename = f"metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{num_workers}workers.json"
+        metrics_path = Path(config.LOGS_DIR) / metrics_filename
+        with open(metrics_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, indent=2)
+        log(f"\nMetrics saved to: {metrics_path}")
+    
+    if log_file:
+        log_file.close()
 
 
 if __name__ == '__main__':

@@ -29,6 +29,9 @@ desktop.ini
 
 # Test/debug files
 legacy/*/db/*.db
-*.log
 debug_*.html
 test_*.html
+
+# Logs
+logs/
+*.log

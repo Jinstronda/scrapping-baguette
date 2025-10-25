@@ -44,9 +44,9 @@ Here's the thing that makes this scraper actually work: it's not just fast, it's
 
 The website shows 10 results per page, max 10 pages. So if you search for "a", you get 100 doctors max. But what if there are 500 doctors whose names start with "a"? You'd miss 400. That's not acceptable.
 
-We tried the obvious thing first: just scrape a-z. Sounds comprehensive, right? Wrong. We got maybe 2,600 doctors. But we knew there were way more in the database. The problem? Common prefixes like "a", "b", "ma", "de" were all hitting that 100-doctor wall.
+I tried the obvious thing first: just scrape a-z. Sounds comprehensive, right? Wrong. I got maybe 2,600 doctors. But I knew there were way more in the database. The problem? Common prefixes like "a", "b", "ma", "de" were all hitting that 100-doctor wall.
 
-Then we had the realization: **it's a tree**. 
+Then I had the realization: **it's a tree**. 
 
 If "a" gives you 100 results, you've hit the limit. So you expand: aa, ab, ac... az. Twenty-six new branches. Most of these give you 5-10 doctors and you're done. But "al"? That one also hits 100. So you expand again: ala, alb, alc... alz.
 
@@ -82,7 +82,7 @@ SMART_EXPANSION = True
 
 That's it. Run it once, walk away, come back to a complete database.
 
-We tested it with 10 workers and got:
+I tested it with 10 workers and got:
 - **904 doctors** in 21 minutes
 - **99.7% detail completion** (all 4 tabs)
 - **100% success rate** (no failures)
@@ -92,7 +92,7 @@ It works. It's simple. And it finds everything.
 
 ---
 
-## 💭 How We Got Here
+## 💭 How I Got Here
 
 This wasn't the first version. Not even close.
 
@@ -101,14 +101,14 @@ The obvious approach. Python has `threading`, everyone uses it, should be easy. 
 
 Except it didn't work. Got 5 doctors, then empty HTML. Then 403 errors. The website's session management saw multiple concurrent detail requests from the same session and said "nope, you're a bot."
 
-Also, Python's GIL meant we weren't even getting real parallelism. Threads were taking turns. No speedup, all the headache.
+Also, Python's GIL meant I wasn't even getting real parallelism. Threads were taking turns. No speedup, all the headache.
 
 **Attempt 2: Scrapy**
 "Use a real web scraping framework," they said. "It handles concurrency," they said.
 
-We rewrote everything in Scrapy. Proper cookiejar management, one jar per doctor. FormRequest for POST data. All the best practices. Took hours.
+I rewrote everything in Scrapy. Proper cookiejar management, one jar per doctor. FormRequest for POST data. All the best practices. Took hours.
 
-Still got empty detail pages. The site wanted params in the URL, not in the POST body. Scrapy's architecture made this awkward. We could fix it, but why fight the framework?
+Still got empty detail pages. The site wanted params in the URL, not in the POST body. Scrapy's architecture made this awkward. I could fix it, but why fight the framework?
 
 **Attempt 3: Just One Session**
 Fuck it. Back to basics. One process, one session, sequential scraping. No concurrency at all.
@@ -116,11 +116,11 @@ Fuck it. Back to basics. One process, one session, sequential scraping. No concu
 It worked. All data captured. 100% quality. But: 1 doctor per second. To scrape 100,000 doctors? 27 hours. Not acceptable.
 
 **The Breakthrough: Multiprocessing + Smart Prefixes**
-The realization: we don't need threads to share a session. We need *separate* sessions that don't conflict.
+The realization: I don't need threads to share a session. I need *separate* sessions that don't conflict.
 
 Solution: Multiprocessing. Each process = independent Python interpreter = completely isolated session. The website sees different "users." No conflicts.
 
-Then the prefix expansion idea hit. Instead of dividing work by number of doctors (which we don't know), divide by *search space*. Worker 1 scrapes "a", worker 2 scrapes "b", etc. When a prefix hits the limit, expand it into sub-prefixes. Auto-balancing, auto-complete.
+Then the prefix expansion idea hit. Instead of dividing work by number of doctors (which I don't know), divide by *search space*. Worker 1 scrapes "a", worker 2 scrapes "b", etc. When a prefix hits the limit, expand it into sub-prefixes. Auto-balancing, auto-complete.
 
 Four files. 700 lines total. Works perfectly.
 

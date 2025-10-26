@@ -3,9 +3,6 @@ db/
 *.db
 *.db-journal
 
-# Legacy code (archived experiments)
-legacy/
-
 # Python cache
 __pycache__/
 *.py[cod]
